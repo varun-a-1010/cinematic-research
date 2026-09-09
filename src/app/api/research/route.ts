@@ -42,6 +42,25 @@ export async function POST(request: Request) {
     throw error;
   }
 
+  if (request.headers.get("accept")?.includes("application/x-ndjson")) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (event: unknown) => { try { controller.enqueue(encoder.encode(JSON.stringify(event) + "\n")); } catch { /* Client disconnected. */ } };
+        try {
+          const result = await runResearch(input.query, input.options, (message) => send({ type: "progress", message }));
+          send({ type: "result", result });
+        } catch (error) {
+          console.error("Research pipeline failed", error);
+          send({ type: "error", message: error instanceof ResearchConfigurationError ? error.message : "The research run could not finish. Please retry; upstream capacity may be temporarily unavailable." });
+        } finally {
+          try { controller.close(); } catch { /* Client disconnected. */ }
+        }
+      },
+    });
+    return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" } });
+  }
+
   try {
     const result = await runResearch(input.query, input.options);
     return NextResponse.json(result);

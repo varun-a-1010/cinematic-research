@@ -210,6 +210,7 @@ export default function Home() {
   const [questionDraft, setQuestionDraft] = useState<string>(sampleQueries[0].question);
   const [editingQuestion, setEditingQuestion] = useState(false);
   const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState("");
   const [researchError, setResearchError] = useState("");
   const [refinement, setRefinement] = useState("");
   const [lastRefinement, setLastRefinement] = useState("");
@@ -272,14 +273,38 @@ export default function Home() {
 
   async function executeResearch(query: string) {
     setRunning(true);
+    setProgress("Connecting to the research agent…");
     setResearchError("");
     try {
       const response = await fetch("/api/research", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Accept": "application/x-ndjson" },
         body: JSON.stringify({ query, options }),
       });
-      const payload = await response.json();
+      let payload;
+      if (response.ok && response.headers.get("content-type")?.includes("application/x-ndjson") && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            pending += decoder.decode(value, { stream: !done });
+            const lines = pending.split("\n");
+            pending = lines.pop() ?? "";
+            if (done && pending.trim()) lines.push(pending);
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              const event = JSON.parse(line);
+              if (event.type === "progress") setProgress(event.message);
+              if (event.type === "error") throw new Error(event.message);
+              if (event.type === "result") payload = event.result;
+            }
+            if (done) break;
+          }
+        } finally { reader.releaseLock(); }
+        if (!payload) throw new Error("The research connection ended before the report completed. Please retry.");
+      } else { payload = await response.json(); }
       if (!response.ok) {
         throw new Error(payload.message || "The research run failed.");
       }
@@ -372,7 +397,7 @@ export default function Home() {
             </label>
             <label><input type="checkbox" checked={options.multilingual} onChange={(event) => setOptions({ ...options, multilingual: event.target.checked })} /> Include original-language sources</label>
           </fieldset>
-          {running && <p role="status">Researching and checking sources. This may take several minutes.</p>}
+          {running && <p role="status">{progress}</p>}
           {researchError && !editingQuestion && <p role="alert" className={styles.researchError}>{researchError}</p>}
           {editingQuestion ? (
             <form className={styles.questionForm} onSubmit={submitQuestion}>
@@ -484,10 +509,12 @@ export default function Home() {
         </div>
 
         <div className={styles.researchState} aria-label="Research state">
+          {running ? <span role="status">{progress}</span> : <>
           <span><b>Brief</b> {running ? "being compiled" : result ? "ready" : "awaiting a question"}</span>
           <span><b>Search angles</b> {result?.metrics.searchAngles ?? 0}</span>
           <span><b>Sources retrieved</b> {result?.metrics.sourcesReviewed ?? 0}</span>
           <span><b>Candidates tested</b> {result?.metrics.candidatesTested ?? 0}</span>
+          </>}
         </div>
       </section>
 

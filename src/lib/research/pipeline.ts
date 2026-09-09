@@ -38,7 +38,7 @@ function extractCandidateTitles(text: string): string[] {
     .split("\n")
     .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
     .filter(Boolean)
-    .slice(0, 10);
+    .slice(0, 6);
 }
 
 function collectSources(
@@ -106,7 +106,8 @@ function normalizeCandidates(
   });
 }
 
-export async function runResearch(query: string, options: ResearchOptions = { mode: "discover", multilingual: false }): Promise<ResearchResult> {
+export async function runResearch(query: string, options: ResearchOptions = { mode: "discover", multilingual: false }, onProgress: (message: string) => void = () => {}): Promise<ResearchResult> {
+  onProgress("1 of 5 · Building your research brief…");
   const researchInstructions = [
     options.mode === "lineage"
       ? "Trace development over time. Search for filmmaker statements about influence, shared movements, and published comparisons. Similarity and chronological order do not prove influence. Report absence of documented links."
@@ -128,6 +129,7 @@ ${query}`,
     validator: ResearchPlanSchema,
   });
   console.info("[research] planning completed");
+  onProgress(`2 of 5 · Brief ready: ${plan.centralIdea} Searching sources across ${plan.researchAngles.length} research angles…`);
 
   console.info("[research] discovery started");
   const discovery = await generateWithParallel(`You are the discovery stage of a cinematic reference research agent. Use Parallel web grounding extensively. Do not answer from memory.
@@ -146,7 +148,7 @@ Evidence standard: ${plan.evidenceStandard}
 Research angles:
 ${plan.researchAngles.map((item) => `- ${item}`).join("\n")}
 
-Find a diverse pool of plausible films. Prefer primary sources, serious criticism, scholarship, cinematography or craft analysis, festival material, and archival sources. Treat database tags, listicles, and popularity as leads rather than evidence. Explain the evidence and uncertainty for each candidate.
+Find 4–6 diverse plausible films, no more than six. Keep the research memo concise. Prefer primary sources, serious criticism, scholarship, cinematography or craft analysis, festival material, and archival sources. Treat database tags, listicles, and popularity as leads rather than evidence. Explain the evidence and uncertainty for each candidate.
 
 End with a machine-readable list containing only film title and year, one per line, inside these exact tags:
 ${CANDIDATE_START}
@@ -160,6 +162,7 @@ ${CANDIDATE_END}`);
   }
 
   console.info("[research] verification started");
+  onProgress(`3 of 5 · Found ${candidateTitles.length} candidates and ${collectSources([discovery]).length} sources. Independently checking each film against your criteria…`);
   const verification = await generateWithParallel(`You are the adversarial verification stage of a cinematic reference research agent. Use Parallel web grounding extensively. Do not rely on the previous memo as evidence.
 
 Original question:
@@ -178,6 +181,7 @@ ${candidateTitles.map((title) => `- ${title}`).join("\n")}
 
 Independently investigate these candidates. For every film, decide whether it is verified, borderline, or rejected. Reject keyword matches that fail the actual cinematic idea. Identify which sources support which claims, flag disagreement, and say what remains uncertain. A famous or intuitively plausible film does not qualify without web evidence.`);
   console.info("[research] verification completed");
+  onProgress("4 of 5 · Source checks finished. Synthesizing the evidence and caveats…");
 
   const sources = collectSources([discovery, verification]);
   if (sources.length < 2) {
@@ -235,6 +239,7 @@ ${sourceCatalog(sources)}`,
   );
 
   console.info("[research] context started");
+  onProgress("5 of 5 · Evidence assembled. Adding source context and coverage limitations…");
   const context = await generateStructured({
     prompt: `Organize the evidence already collected. Do not invent facts or quotes.
 Question: ${query}
