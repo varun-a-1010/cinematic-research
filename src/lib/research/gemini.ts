@@ -2,6 +2,7 @@ import "server-only";
 
 import { GoogleGenAI, type GroundingMetadata } from "@google/genai";
 import { z } from "zod";
+import { modelChain, withModelFallback } from "./model-fallback";
 import {
   getResearchRuntimeConfig,
   type ResearchRuntimeConfig,
@@ -17,40 +18,8 @@ function createClient(config: ResearchRuntimeConfig) {
     enterprise: true,
     project: config.project,
     location: config.location,
+    httpOptions: { retryOptions: { attempts: 1 } },
   });
-}
-
-function getErrorStatus(error: unknown): number | undefined {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "status" in error &&
-    typeof error.status === "number"
-  ) {
-    return error.status;
-  }
-
-  return undefined;
-}
-
-async function withCapacityRetry<T>(operation: () => Promise<T>): Promise<T> {
-  const delays = [2_000, 6_000, 18_000];
-
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      const delay = delays[attempt];
-      if (getErrorStatus(error) !== 429 || delay === undefined) {
-        throw error;
-      }
-
-      console.warn(
-        `[research] Gemini capacity limit; retrying in ${delay / 1_000}s`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
 }
 
 export async function generateStructured<T>(options: {
@@ -60,9 +29,9 @@ export async function generateStructured<T>(options: {
 }): Promise<T> {
   const config = getResearchRuntimeConfig();
   const client = createClient(config);
-  const response = await withCapacityRetry(() =>
+  const response = await withModelFallback(modelChain(config.model), (model) =>
     client.models.generateContent({
-      model: config.model,
+      model,
       contents: options.prompt,
       config: {
         responseMimeType: "application/json",
@@ -81,9 +50,9 @@ export async function generateStructured<T>(options: {
 export async function generateWithParallel(prompt: string, retried = false): Promise<GroundedResponse> {
   const config = getResearchRuntimeConfig();
   const client = createClient(config);
-  const response = await withCapacityRetry(() =>
+  const response = await withModelFallback(modelChain(config.model), (model) =>
     client.models.generateContent({
-      model: config.model,
+      model,
       contents: prompt,
       config: {
         tools: [
